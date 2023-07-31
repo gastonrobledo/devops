@@ -5,7 +5,7 @@ resource "aws_eks_cluster" "this" {
   version  = var.kube_version
 
   vpc_config {
-    # security_group_ids      = [aws_security_group.eks_cluster.id, aws_security_group.eks_nodes.id]
+    #security_group_ids      = [aws_security_group.eks_cluster.id, aws_security_group.eks_nodes.id]
     subnet_ids              = flatten([aws_subnet.public[*].id, aws_subnet.private[*].id])
     endpoint_private_access = true
     endpoint_public_access  = true
@@ -182,4 +182,16 @@ resource "aws_security_group_rule" "nodes_cluster_inbound" {
   source_security_group_id = aws_security_group.eks_cluster.id
   to_port                  = 65535
   type                     = "ingress"
+}
+
+resource "kubernetes_storage_class" "elasticsearch_ssd" {
+  metadata {
+    name = "elasticsearch-ssd"
+  }
+  storage_provisioner = "kubernetes.io/gce-pd"
+  reclaim_policy      = "Retain"
+  parameters = {
+    type = "pd-ssd"
+  }
+  allow_volume_expansion = true
 }
