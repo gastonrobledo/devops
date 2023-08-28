@@ -10,9 +10,13 @@ Provision ec2 vm in aws.
 
 Provision a k8 cluster in aws
 
-### Monitoring / Observability
+### Set variables on each folder with the desired data.
 
-- Provision Prometheus / Graphana ??
-
-Elastic
-https://automateinfra.com/2021/05/03/how-to-launch-aws-elasticsearch-using-terraform-in-amazon-account/
+```
+aws_access_key = "YOUR_AWS_KEY"
+aws_secret_key = "YOUR_AWS_SECRET"
+aws_region = "us-east-1"
+instance_type = "t2.small"
+project = "TerraformEKSMundoesE"
+kube_version = "1.27"
+```
