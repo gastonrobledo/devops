@@ -1,197 +1,115 @@
-# EKS Cluster
-resource "aws_eks_cluster" "this" {
-  name     = "${var.project}-cluster"
-  role_arn = aws_iam_role.cluster.arn
-  version  = var.kube_version
-
-  vpc_config {
-    #security_group_ids      = [aws_security_group.eks_cluster.id, aws_security_group.eks_nodes.id]
-    subnet_ids              = flatten([aws_subnet.public[*].id, aws_subnet.private[*].id])
-    endpoint_private_access = true
-    endpoint_public_access  = true
-    public_access_cidrs     = ["0.0.0.0/0"]
+# Filter out local zones, which are not currently supported 
+# with managed node groups
+data "aws_availability_zones" "available" {
+  filter {
+    name   = "opt-in-status"
+    values = ["opt-in-not-required"]
   }
+}
+
+locals {
+  cluster_name = "mundose-eks-${random_string.suffix.result}"
+}
+
+resource "random_string" "suffix" {
+  length  = 8
+  special = false
+}
+
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "5.0.0"
+
+  name = "mundose-vpc"
+
+  cidr = "10.0.0.0/16"
+  azs  = slice(data.aws_availability_zones.available.names, 0, 3)
+
+  private_subnets = ["10.0.1.0/24", "10.0.2.0/24", "10.0.3.0/24"]
+  public_subnets  = ["10.0.4.0/24", "10.0.5.0/24", "10.0.6.0/24"]
+
+  enable_nat_gateway   = true
+  single_nat_gateway   = true
+  enable_dns_hostnames = true
+
+  public_subnet_tags = {
+    "kubernetes.io/cluster/${local.cluster_name}" = "shared"
+    "kubernetes.io/role/elb"                      = 1
+  }
+
+  private_subnet_tags = {
+    "kubernetes.io/cluster/${local.cluster_name}" = "shared"
+    "kubernetes.io/role/internal-elb"             = 1
+  }
+}
+
+module "eks" {
+  source  = "terraform-aws-modules/eks/aws"
+  version = "19.15.3"
+
+  cluster_name    = local.cluster_name
+  cluster_version = var.kube_version
+
+  vpc_id                         = module.vpc.vpc_id
+  subnet_ids                     = module.vpc.private_subnets
+  cluster_endpoint_public_access = true
 
   tags = merge(
     var.tags
   )
 
-  depends_on = [
-    aws_iam_role_policy_attachment.cluster_AmazonEKSClusterPolicy
-  ]
-}
+  eks_managed_node_group_defaults = {
+    ami_type = "AL2_x86_64"
 
+  }
 
-# EKS Cluster IAM Role
-resource "aws_iam_role" "cluster" {
-  name = "${var.project}-Cluster-Role"
+  eks_managed_node_groups = {
+    one = {
+      name = "node-group-1"
 
-  assume_role_policy = <<POLICY
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "Service": "eks.amazonaws.com"
-      },
-      "Action": "sts:AssumeRole"
+      instance_types = [var.instance_type]
+
+      min_size     = 1
+      max_size     = 3
+      desired_size = 2
     }
-  ]
-}
-POLICY
-}
 
-resource "aws_iam_role_policy_attachment" "cluster_AmazonEKSClusterPolicy" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSClusterPolicy"
-  role       = aws_iam_role.cluster.name
-}
+    two = {
+      name = "node-group-2"
 
+      instance_types = [var.instance_type]
 
-# EKS Cluster Security Group
-resource "aws_security_group" "eks_cluster" {
-  name        = "${var.project}-cluster-sg"
-  description = "Cluster communication with worker nodes"
-  vpc_id      = aws_vpc.this.id
-
-  tags = {
-    Name = "${var.project}-cluster-sg"
-  }
-}
-
-resource "aws_security_group_rule" "cluster_inbound" {
-  description              = "Allow worker nodes to communicate with the cluster API Server"
-  from_port                = 443
-  protocol                 = "tcp"
-  security_group_id        = aws_security_group.eks_cluster.id
-  source_security_group_id = aws_security_group.eks_nodes.id
-  to_port                  = 443
-  type                     = "ingress"
-}
-
-resource "aws_security_group_rule" "cluster_outbound" {
-  description              = "Allow cluster API Server to communicate with the worker nodes"
-  from_port                = 1024
-  protocol                 = "tcp"
-  security_group_id        = aws_security_group.eks_cluster.id
-  source_security_group_id = aws_security_group.eks_nodes.id
-  to_port                  = 65535
-  type                     = "egress"
-}
-
-# EKS Node Groups
-resource "aws_eks_node_group" "this" {
-  cluster_name    = aws_eks_cluster.this.name
-  node_group_name = var.project
-  node_role_arn   = aws_iam_role.node.arn
-  subnet_ids      = aws_subnet.private[*].id
-
-  scaling_config {
-    desired_size = 2
-    max_size     = 5
-    min_size     = 1
-  }
-
-  ami_type       = "AL2_x86_64" # AL2_x86_64, AL2_x86_64_GPU, AL2_ARM_64, CUSTOM
-  capacity_type  = "ON_DEMAND"  # ON_DEMAND, SPOT
-  disk_size      = 20
-  instance_types = [var.instance_type]
-
-  tags = merge(
-    var.tags
-  )
-
-  depends_on = [
-    aws_iam_role_policy_attachment.node_AmazonEKSWorkerNodePolicy,
-    aws_iam_role_policy_attachment.node_AmazonEKS_CNI_Policy,
-    aws_iam_role_policy_attachment.node_AmazonEC2ContainerRegistryReadOnly,
-  ]
-}
-
-
-# EKS Node IAM Role
-resource "aws_iam_role" "node" {
-  name = "${var.project}-Worker-Role"
-
-  assume_role_policy = <<POLICY
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Principal": {
-        "Service": "ec2.amazonaws.com"
-      },
-      "Action": "sts:AssumeRole"
+      min_size     = 1
+      max_size     = 2
+      desired_size = 1
     }
-  ]
-}
-POLICY
-}
-
-resource "aws_iam_role_policy_attachment" "node_AmazonEKSWorkerNodePolicy" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy"
-  role       = aws_iam_role.node.name
-}
-
-resource "aws_iam_role_policy_attachment" "node_AmazonEKS_CNI_Policy" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy"
-  role       = aws_iam_role.node.name
-}
-
-resource "aws_iam_role_policy_attachment" "node_AmazonEC2ContainerRegistryReadOnly" {
-  policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly"
-  role       = aws_iam_role.node.name
-}
-
-
-# EKS Node Security Group
-resource "aws_security_group" "eks_nodes" {
-  name        = "${var.project}-node-sg"
-  description = "Security group for all nodes in the cluster"
-  vpc_id      = aws_vpc.this.id
-
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
   }
+}
 
+
+# https://aws.amazon.com/blogs/containers/amazon-ebs-csi-driver-is-now-generally-available-in-amazon-eks-add-ons/ 
+data "aws_iam_policy" "ebs_csi_policy" {
+  arn = "arn:aws:iam::aws:policy/service-role/AmazonEBSCSIDriverPolicy"
+}
+
+module "irsa-ebs-csi" {
+  source  = "terraform-aws-modules/iam/aws//modules/iam-assumable-role-with-oidc"
+  version = "4.7.0"
+
+  create_role                   = true
+  role_name                     = "AmazonEKSTFEBSCSIRole-${module.eks.cluster_name}"
+  provider_url                  = module.eks.oidc_provider
+  role_policy_arns              = [data.aws_iam_policy.ebs_csi_policy.arn]
+  oidc_fully_qualified_subjects = ["system:serviceaccount:kube-system:ebs-csi-controller-sa"]
+}
+
+resource "aws_eks_addon" "ebs-csi" {
+  cluster_name             = module.eks.cluster_name
+  addon_name               = "aws-ebs-csi-driver"
+  addon_version            = "v1.20.0-eksbuild.1"
+  service_account_role_arn = module.irsa-ebs-csi.iam_role_arn
   tags = {
-    Name = "${var.project}-node-sg"
-    "kubernetes.io/cluster/${var.project}-cluster" = "owned"
+    "eks_addon" = "ebs-csi"
+    "terraform" = "true"
   }
-}
-
-resource "aws_security_group_rule" "nodes_internal" {
-  description              = "Allow nodes to communicate with each other"
-  from_port                = 0
-  protocol                 = "-1"
-  security_group_id        = aws_security_group.eks_nodes.id
-  source_security_group_id = aws_security_group.eks_nodes.id
-  to_port                  = 65535
-  type                     = "ingress"
-}
-
-resource "aws_security_group_rule" "nodes_cluster_inbound" {
-  description              = "Allow worker Kubelets and pods to receive communication from the cluster control plane"
-  from_port                = 1025
-  protocol                 = "tcp"
-  security_group_id        = aws_security_group.eks_nodes.id
-  source_security_group_id = aws_security_group.eks_cluster.id
-  to_port                  = 65535
-  type                     = "ingress"
-}
-
-resource "kubernetes_storage_class" "elasticsearch_ssd" {
-  metadata {
-    name = "elasticsearch-ssd"
-  }
-  storage_provisioner = "kubernetes.io/gce-pd"
-  reclaim_policy      = "Retain"
-  parameters = {
-    type = "pd-ssd"
-  }
-  allow_volume_expansion = true
 }
