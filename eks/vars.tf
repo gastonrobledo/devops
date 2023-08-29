@@ -47,3 +47,7 @@ variable "kube_config" {
   type    = string
   default = "~/.kube/config"
 }
+
+variable "arn_account"  {
+  type = string
+}

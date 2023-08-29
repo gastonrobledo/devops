@@ -4,7 +4,7 @@ module "eks_auth" {
 
   map_users = [
     {
-      userarn  = "arn:aws:iam::590597515155:root"
+      userarn  = var.arn_account
       groups   = ["system:masters"]
       username = "root"
     }

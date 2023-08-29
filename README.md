@@ -28,4 +28,5 @@ aws_region = "us-east-1"
 instance_type = "t2.small"
 project = "TerraformEKSMundoesE"
 kube_version = "1.27"
+arn_account = "arn:aws:iam::590597515155:root"
 ```
