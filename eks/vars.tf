@@ -51,3 +51,7 @@ variable "kube_config" {
 variable "arn_account"  {
   type = string
 }
+
+variable "arn_username" {
+  type = string
+}

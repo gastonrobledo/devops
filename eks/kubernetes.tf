@@ -6,7 +6,7 @@ module "eks_auth" {
     {
       userarn  = var.arn_account
       groups   = ["system:masters"]
-      username = "root"
+      username = var.arn_username
     }
   ]
 }
